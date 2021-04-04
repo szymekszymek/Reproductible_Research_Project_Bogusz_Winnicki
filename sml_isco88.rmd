@@ -1,0 +1,151 @@
+---
+title: "Recoding SML scores (Brynjolfsson et al. (2017)) to ISCO88 codes "
+author: "Honorata Bogusz & Szymon Winnicki"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+```
+
+```{r packages, include=FALSE}
+rm(list=ls())
+gc()
+options(scipen = 999)
+options(timeout=600)
+# possibly not all are needed but I don't remember which ones are for what
+requiredPackages <- c("splitstackshape", "tidyverse", "dplyr", "reshape2", "haven", "stringr", "viridisLite", "gridExtra", "lmreg", "mice","Hmisc","readxl", "qqplotr", "ggstatsplot", "ggplot2", "ggpubr") 
+for (i in requiredPackages) {
+  if (!require(i,character.only = T)) {
+    install.packages(i)
+  }
+}
+for (i in requiredPackages) {
+  if (!require(i,character.only = T)) {
+    library(i,character.only = T)
+  }
+}
+```
+
+# Introduction
+
+In this document, we recode Brynjolfsson's SML scores from O\*NET-SOC classification to the ISCO88 classification. The Excel file with SML scores was reproduced by us using the Python script available at: https://www.aeaweb.org/articles?id=10.1257/pandp.20181019 under "Dataset". The details of recreating are attached in the "README.md" file in this repo. The recoding from O\*NET-SOC to ISCO88 was done by the use of work of Wojciech Hardy, available here: https://ibs.org.pl/en/resources/occupation-classifications-crosswalks-from-onet-soc-to-isco/.
+
+## Licence
+
+Copyright (c) 2021 Honorata Bogusz & Szymon Winnicki
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+# Recoding
+
+We start by loading and cleaning the SML scores dataset.
+
+```{r}
+allscores_SML <- read_excel("allscores_SML.xlsx")
+
+# choosing only relevant columns
+allscores_SML <- allscores_SML[,c(1:2,58,60)]
+colnames(allscores_SML) <- c("onet_code","title","mSML","sdmSML")
+
+# deleting "-" from O*NET-SOC code
+allscores_SML$onet_code <- str_replace_all(allscores_SML$onet_code, "-", "")
+
+# delete duplicates which are present because the dataset includes tasks and we're only interested in occupations
+allscores_SML <- unique(allscores_SML)
+
+# we only have isco88 recoding for o*net 6 digits, so we dispose of observations for more digits
+allscores_SML$x <- str_sub(allscores_SML$onet_code, - 2, - 1)
+allscores_SML <- allscores_SML[(allscores_SML$x=="00"),]
+allscores_SML$onet_code <- str_replace_all(allscores_SML$onet_code, ".00", "")
+allscores_SML$x <- NULL
+```
+
+Then, we load the O\*NET-SOC -- ISCO88 crosswalk generated using the Stata script of Wojciech Hardy. We merge it with the SML data by O\*NET code.
+
+```{r}
+isco88_soc00 <- read_dta("onetsoc_to_isco_cws_ibs/isco88_soc00.dta")
+colnames(isco88_soc00) <- c("isco88_code","onet_code")
+sml <- merge(allscores_SML, isco88_soc00, by = "onet_code")
+
+summary(sml)
+head(sml)
+```
+There's one problem with this classification, namely the fact that in some cases, multiple ISCO88 codes correspond to one O\*NET code. However, this problem cannot be omitted using the data and crosswalk we have at our disposal, as we only have 6-digit O*NET to 4-digit ISCO88 matching.
+
+# SML scores analysis
+
+We can generate and compare the histograms of SML scores in he O\*NET and ISCO88 classifications.
+
+```{r}
+ggplot(allscores_SML, aes(mSML)) + 
+  geom_histogram(aes(y=..count..),
+                 bins=40,
+                 fill="#440154FF",
+                 position="identity") +
+  ggtitle("Distribution of mean SML score across jobs coded by O*NET") +
+    theme_minimal()
+
+ggplot(sml, aes(mSML)) + 
+  geom_histogram(aes(y=..count..),
+                 bins=40,
+                 fill="#FDE725FF",
+                 position="identity") +
+  ggtitle("Distribution of mean SML score across jobs coded by ISCO88") +
+  theme_minimal()
+
+```
+
+It appears that the distribution coded in 6-digit O\*NET is more skewed than the one coded in 4-digit ISCO88. 
+We can also test for normality of the distribution.
+
+```{r}
+# O*NET
+shapiro.test(allscores_SML$mSML)
+# ISCO88
+shapiro.test(sml$mSML)
+```
+
+In both cases, on 5% significance level, we strongly reject the null hypothesis of the distribution being Gaussian.
+
+```{r}
+ggplot(allscores_SML, aes(sample = mSML)) + 
+  stat_qq_point() + # stat_gg_point instead of stat_qq()
+  stat_qq_line(color = "#440154FF") + # identity line
+  stat_qq_band() +
+  ggtitle("QQ plot of mean SML score across jobs coded by O*NET against Gaussian") +
+  theme_minimal()
+
+ggplot(sml, aes(sample = mSML)) + 
+  stat_qq_point() + # stat_gg_point instead of stat_qq()
+  stat_qq_line(color = "#FDE725FF") + # identity line
+  stat_qq_band() +
+  ggtitle("QQ plot of mean SML score across jobs coded by ISCO88 against Gaussian") +
+  theme_minimal()
+```
+
+From the above QQ plots, it seems that in both cases, the middle of the distribution follows the Gaussian distribution quite closely. However, this is not the case for both tails.
+
+We can also see, what ISCO88 occupations have the highest and the lowest SML scores.
+
+```{r}
+# max
+sml %>% slice_max(mSML)
+# max
+sml %>% slice_min(mSML)
+```
+
+According to the ISCO88 classification: https://ec.europa.eu/eurostat/documents/1978984/6037342/ISCO-88-COM.pdf 3118 code corresponds to "Draughtspersons" who are a subgroup of "TECHNICIANS AND ASSOCIATE PROFESSIONALS/Physical and engineering science associate professionals/Physical and engineering science technicians". According to Wikipedia (https://en.wikipedia.org/wiki/Drafter):
+
+*A drafter, draughtsman/draughtswoman (British English and Commonwealth English), draftsman/draftswoman, drafting technician (American English and Canadian English) is an engineering technician who makes detailed technical drawings or plans for machinery, buildings, electronics, infrastructure, sections, etc. Drafters use computer software and manual sketches to convert the designs, plans, and layouts of engineers and architects into a set of technical drawings. Drafters operate as the supporting developers and sketch engineering designs and drawings from preliminary design concepts.*
+
+The ISCO88 profession with min. SML is 2211: "Biologists, botanists, zoologists and related professionals", who are a subgroup of "PROFESSIONALS/Life science and health professionals/Life science professionals".
+
+Having the SML scores recoded to European classification at one's disposal can be crucial for analysing the impact AI has on European labour markets.
